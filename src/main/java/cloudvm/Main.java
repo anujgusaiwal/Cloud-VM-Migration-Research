@@ -1,4 +1,5 @@
 package cloudvm;
+import cloudvm.monitoring.LoadMonitor;
 
 import org.cloudsimplus.core.CloudSimPlus;
 import org.cloudsimplus.datacenters.Datacenter;
@@ -91,6 +92,12 @@ public class Main {
         System.out.println();
 
         System.out.println("Simulation finished.");
+
+        // VM load monitoring
+        LoadMonitor.printVmLoads(vmList);
+
+        // Overload detection
+        LoadMonitor.printOverloadedVms(vmList);
 
         System.out.println();
 
