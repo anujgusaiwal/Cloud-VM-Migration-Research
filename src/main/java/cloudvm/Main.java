@@ -1,5 +1,4 @@
 package cloudvm;
-import cloudvm.monitoring.LoadMonitor;
 
 import org.cloudsimplus.core.CloudSimPlus;
 import org.cloudsimplus.datacenters.Datacenter;
@@ -21,9 +20,9 @@ import java.util.List;
 
 public class Main {
 
-    // ==============================
+    // =========================================
     // SIMULATION CONFIGURATION
-    // ==============================
+    // =========================================
 
     private static final int HOSTS = 5;
     private static final int VMS = 10;
@@ -35,6 +34,12 @@ public class Main {
     private static final int VM_PES = 1;
     private static final long VM_MIPS = 1000;
 
+    // Overload threshold = 80%
+    private static final double OVERLOAD_THRESHOLD = 0.80;
+
+    // How often to print VM load
+    private static final double MONITOR_INTERVAL = 5.0;
+
     private CloudSimPlus simulation;
     private Datacenter datacenter;
     private DatacenterBroker broker;
@@ -42,15 +47,24 @@ public class Main {
     private List<Vm> vmList;
     private List<Cloudlet> cloudletList;
 
+    private double lastMonitorTime = -1;
+
+
+    // =========================================
+    // MAIN
+    // =========================================
 
     public static void main(String[] args) {
 
         Main simulation = new Main();
 
         simulation.start();
-
     }
 
+
+    // =========================================
+    // CONSTRUCTOR
+    // =========================================
 
     public Main() {
 
@@ -66,16 +80,23 @@ public class Main {
         // Create VMs
         vmList = createVMs();
 
-        // Create tasks
+        // Create imbalanced workload
         cloudletList = createCloudlets();
 
         // Submit VMs
         broker.submitVmList(vmList);
 
-        // Submit tasks
+        // Submit Cloudlets
         broker.submitCloudletList(cloudletList);
+
+        // Enable runtime monitoring
+        addLoadMonitoring();
     }
 
+
+    // =========================================
+    // START SIMULATION
+    // =========================================
 
     public void start() {
 
@@ -93,15 +114,66 @@ public class Main {
 
         System.out.println("Simulation finished.");
 
-        // VM load monitoring
-        LoadMonitor.printVmLoads(vmList);
-
-        // Overload detection
-        LoadMonitor.printOverloadedVms(vmList);
-
         System.out.println();
 
         printResults();
+    }
+
+
+    // =========================================
+    // RUNTIME VM LOAD MONITORING
+    // =========================================
+
+    private void addLoadMonitoring() {
+
+        simulation.addOnClockTickListener(info -> {
+
+            double currentTime = info.getTime();
+
+            /*
+             * Print VM loads approximately every 5 seconds.
+             *
+             * We use >= instead of:
+             *
+             * currentTime % 5 == 0
+             *
+             * because simulation time is represented
+             * using floating-point values.
+             */
+
+            if (currentTime >= lastMonitorTime + MONITOR_INTERVAL) {
+
+                lastMonitorTime = currentTime;
+
+                System.out.println();
+                System.out.println("--------------------------------------");
+
+                System.out.printf(
+                        "VM LOAD AT SIMULATION TIME %.2f%n",
+                        currentTime
+                );
+
+                System.out.println("--------------------------------------");
+
+                for (Vm vm : vmList) {
+
+                    double cpuUtilization =
+                            vm.getCpuPercentUtilization();
+
+                    System.out.printf(
+                            "VM %d -> CPU Load: %.2f%%",
+                            vm.getId(),
+                            cpuUtilization * 100
+                    );
+
+                    if (cpuUtilization >= OVERLOAD_THRESHOLD) {
+                        System.out.print("  <-- OVERLOADED");
+                    }
+
+                    System.out.println();
+                }
+            }
+        });
     }
 
 
@@ -120,7 +192,10 @@ public class Main {
             hostList.add(host);
         }
 
-        return new DatacenterSimple(simulation, hostList);
+        return new DatacenterSimple(
+                simulation,
+                hostList
+        );
     }
 
 
@@ -139,9 +214,9 @@ public class Main {
             );
         }
 
-        long ram = 8192;        // MB
-        long bandwidth = 10000; // Mbps
-        long storage = 1_000_000; // MB
+        long ram = 8192;            // MB
+        long bandwidth = 10000;     // Mbps
+        long storage = 1_000_000;   // MB
 
         return new HostSimple(
                 ram,
@@ -179,19 +254,69 @@ public class Main {
 
 
     // =========================================
-    // CREATE CLOUDLETS / TASKS
+    // CREATE IMBALANCED CLOUDLETS
     // =========================================
 
     private List<Cloudlet> createCloudlets() {
 
         List<Cloudlet> list = new ArrayList<>();
 
-        UtilizationModelFull utilization =
-                new UtilizationModelFull();
+        /*
+         * We intentionally create an imbalanced workload.
+         *
+         * VM 0 -> 10 heavy tasks
+         * VM 1 -> 4 medium tasks
+         * VM 2 -> 3 light tasks
+         * VM 3 -> 2 very light tasks
+         * VM 4 -> 1 smallest task
+         *
+         * VM 5-9 -> No tasks
+         *
+         * This gives us an intentionally imbalanced
+         * workload for studying load balancing.
+         */
 
         for (int i = 0; i < CLOUDLETS; i++) {
 
-            long length = 10_000;
+            long length;
+
+            Vm targetVm;
+
+            if (i < 10) {
+
+                // Heavy workload
+                length = 20_000;
+
+                targetVm = vmList.get(0);
+
+            } else if (i < 14) {
+
+                // Medium workload
+                length = 10_000;
+
+                targetVm = vmList.get(1);
+
+            } else if (i < 17) {
+
+                // Light workload
+                length = 5_000;
+
+                targetVm = vmList.get(2);
+
+            } else if (i < 19) {
+
+                // Very light workload
+                length = 3_000;
+
+                targetVm = vmList.get(3);
+
+            } else {
+
+                // Smallest workload
+                length = 1_000;
+
+                targetVm = vmList.get(4);
+            }
 
             Cloudlet cloudlet =
                     new CloudletSimple(
@@ -199,10 +324,19 @@ public class Main {
                             1
                     );
 
-            cloudlet.setUtilizationModelCpu(utilization);
+            // Cloudlet uses CPU
+            cloudlet.setUtilizationModelCpu(
+                    new UtilizationModelFull()
+            );
 
             cloudlet.setFileSize(1024);
             cloudlet.setOutputSize(1024);
+
+            /*
+             * Explicitly assign this task
+             * to the selected VM.
+             */
+            cloudlet.setVm(targetVm);
 
             list.add(cloudlet);
         }
@@ -212,7 +346,7 @@ public class Main {
 
 
     // =========================================
-    // PRINT RESULTS
+    // PRINT FINAL RESULTS
     // =========================================
 
     private void printResults() {
@@ -242,6 +376,8 @@ public class Main {
 
         System.out.println();
 
-        System.out.println("Simulation completed successfully.");
+        System.out.println(
+                "Simulation completed successfully."
+        );
     }
 }
